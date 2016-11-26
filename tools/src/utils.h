@@ -11,6 +11,7 @@
 
 #define AUCONT_DIR std::string(".aucont")
 #define CONTLIST_FILE_PATH (AUCONT_DIR + "/contlist")
+#define CGROUPS_DIR std::string(".aucont/cgroup")
 
 int read_int(int fd)
 {

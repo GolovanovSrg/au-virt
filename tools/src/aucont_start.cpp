@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <thread>
 
 #include <cstring>
 #include <cstdlib>
@@ -200,6 +201,100 @@ void configure_fs(const std::string& root)
   }
 }
 
+void configure_cpu(int pid, int cpu_perc)
+{
+  std::string cpu_cgroup_dir = CGROUPS_DIR + "/cpu";
+
+  std::string mount_cgroups_cmd = "sudo mount -t cgroup -o cpu none " + cpu_cgroup_dir;
+  std::string umount_cgroups_cmd = "sudo umount " + cpu_cgroup_dir;
+
+  if (system(mount_cgroups_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not mount cpu cgroup";
+    exit(1);
+  }
+
+  std::string proc_cgroup_dir = cpu_cgroup_dir + "/" + std::to_string(pid);
+  std::string mkdir_cmd = "sudo mkdir -p " + proc_cgroup_dir;
+  std::string chown_cmd = "sudo chown -R " + std::to_string(getuid()) + ":" + std::to_string(getgid()) + " " + proc_cgroup_dir;
+
+  if (system(mkdir_cmd.c_str()) < 0 || system(chown_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not make directory " +  proc_cgroup_dir << std::endl;
+    system(umount_cgroups_cmd.c_str());
+    exit(1);
+  }
+
+  std::string set_period_cmd = "echo 1000000 >> " + proc_cgroup_dir + "/cpu.cfs_period_us";
+  int quota = 1000000 * std::thread::hardware_concurrency() / 100 * cpu_perc;
+  std::string set_quota_cmd = "echo " + std::to_string(quota) + " >> " + proc_cgroup_dir + "/cpu.cfs_quota_us";
+  std::string set_pid_cmd = "echo " + std::to_string(pid) + " >> " + proc_cgroup_dir + "/cgroup.procs";
+
+  if (system(set_period_cmd.c_str()) < 0 ||
+      system(set_quota_cmd.c_str()) < 0 ||
+      system(set_pid_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not make cpu cgpup for process " << pid << std::endl;
+    std::string remove_proc_dir = "sudo rm -r " + proc_cgroup_dir;
+    system(umount_cgroups_cmd.c_str());
+    system(remove_proc_dir.c_str());
+    exit(1);
+  }
+
+  if (system(umount_cgroups_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not unmount cpu cgroup";
+    exit(1);
+  }
+}
+
+std::string increment_ip(const std::string& address_string)
+{
+    in_addr_t address = inet_addr(address_string.c_str());
+    address = ntohl(address);
+    address += 1;
+    address = htonl(address);
+    struct in_addr address_struct;
+    address_struct.s_addr = address;
+    return std::string(inet_ntoa(address_struct));
+}
+
+void configure_container_net(const std::string& ip)
+{
+  std::string cmd1 = "ip link set v1-" + ip + " up";
+  std::string cmd2 = "ip addr add " + ip + "/24 dev v1-" + ip;
+  std::string cmd3 = "ip link set lo up";
+  std::string cmd4 = "ip route add default via " + increment_ip(ip);
+
+  if (system(cmd1.c_str()) < 0 ||
+      system(cmd2.c_str()) < 0 ||
+      system(cmd3.c_str()) < 0 ||
+      system(cmd4.c_str()) < 0)
+  {
+    std::cout << "Can not configure net on container" << std::endl;
+    exit(1);
+  }
+}
+
+void configure_host_net(const std::string& ip, int cont_pid)
+{
+  std::string cmd1 = "sudo ip link add v0-" + ip + " type veth peer name v1-" + ip;
+  std::string cmd2 = "sudo ip link set v0-" + ip + " up";
+  std::string cmd3 = "sudo ip link set v1-" + ip + " netns " + std::to_string(cont_pid);
+  std::string cmd4 = "sudo ip addr add " + increment_ip(ip) + "/24 dev v0-" + ip;
+  std::string cmd5 = "sudo sysctl net.ipv4.conf.all.forwarding=1 > /dev/null";
+
+  if (system(cmd1.c_str()) < 0 ||
+      system(cmd2.c_str()) < 0 ||
+      system(cmd3.c_str()) < 0 ||
+      system(cmd4.c_str()) < 0 ||
+      system(cmd5.c_str()) < 0)
+  {
+    std::cout << "Can not configure net on host" << std::endl;
+    exit(1);
+  }
+}
+
 int cont_init(void *arg)
 {
   container_parameters* params = (container_parameters*) arg;
@@ -235,6 +330,10 @@ int cont_init(void *arg)
 
   read_int(params->pipe1_fd[0]);
 
+  if (params->ip != "")
+  {
+    configure_container_net(params->ip);
+  }
   configure_uts();
   configure_fs(params->img_path);
 
@@ -277,6 +376,11 @@ int main(int argc, char* argv[])
   int cont_pid = read_int(params.pipe2_fd[0]);
 
   configure_user(cont_pid);
+  configure_cpu(cont_pid, params.cpu_perc);
+  if (params.ip != "")
+  {
+    configure_host_net(params.ip, cont_pid);
+  }
 
   write_int(params.pipe1_fd[1], 1);
 

@@ -235,10 +235,10 @@ def main():
         test_cont_user_root_is_fake()
         test_host_user_uid_preserved()
 
-        #test_cpu_perc_limit()
-        #test_basic_networking()
-        #test_webserver()
-        #test_many_cont_networks()
+        test_cpu_perc_limit()
+        test_basic_networking()
+        test_webserver()
+        test_many_cont_networks()
 
         util.log('===== ALL TESTS ARE PASSED! =====')
 

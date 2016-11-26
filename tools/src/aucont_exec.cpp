@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <fcntl.h>
-
+#include <sys/wait.h>
 #include "utils.h"
 
 namespace
@@ -28,6 +28,35 @@ void set_namespace(std::string pid, std::string ns_name)
   }
 
   close(d);
+}
+
+void set_cpu_cgroup(const std::string& pid)
+{
+  std::string cpu_cgroup_dir = CGROUPS_DIR + "/cpu";
+  std::string mount_cgroups_cmd = "sudo mount -t cgroup -o cpu none " + cpu_cgroup_dir;
+std::string unmount_cgroups_cmd = "sudo umount " + cpu_cgroup_dir;
+
+  if (system(mount_cgroups_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not mount cpu cgroup";
+    exit(1);
+  }
+
+  std::string proc_cgroup_dir = cpu_cgroup_dir + "/" + pid;
+  std::string set_pid_cmd = "echo " + std::to_string(getpid()) + " >> " + proc_cgroup_dir + "/cgroup.procs";
+
+  if (system(set_pid_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not make cpu cgpup for process " << getpid() << std::endl;
+    system(unmount_cgroups_cmd.c_str());
+    exit(1);
+  }
+
+  if (system(unmount_cgroups_cmd.c_str()) < 0)
+  {
+    std::cout << "Can not unmount cpu cgroup";
+    exit(1);
+  }
 }
 
 } // anonymous namespace
@@ -57,6 +86,7 @@ int main(int argc, char* argv[])
 
   std::string id_str = std::to_string(id);
 
+  set_cpu_cgroup(id_str);
   set_namespace(id_str, "user");
   set_namespace(id_str, "pid");
   set_namespace(id_str, "ipc");
@@ -64,11 +94,18 @@ int main(int argc, char* argv[])
   set_namespace(id_str, "uts");
   set_namespace(id_str, "mnt");
 
-  if (execvp(args[0], args.data()) < 0)
+  int pid = fork();
+  if (pid == 0)
   {
-    std::cout << "Can not run command in container" << std::endl;
-    exit(1);
+    if (execvp(args[0], args.data()) < 0)
+    {
+      std::cout << "Can not run command in container" << std::endl;
+      exit(1);
+    }
   }
-
+  else
+  {
+    waitpid(pid, NULL, 0);
+  }
   return 0;
 }
